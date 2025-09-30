@@ -15,6 +15,7 @@ export default function QueueUI({
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const router = useRouter();
+  const SHEET_ID = "1ok5gX2BNOLbqQrf6YZI1EZmMjlrDq7e33jIvUYbwjw0"; // from Google Sheets URL
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -123,15 +124,14 @@ export default function QueueUI({
         <div className="flex-1 flex flex-col">
           <div className="bg-white rounded-lg shadow-lg p-8 flex-grow flex flex-col justify-center items-center border-2 border-blue-200">
             <div className="text-lg font-medium text-gray-600 mb-4">
-              Sedang Dilayani : 
+              Sedang Dilayani :
             </div>
             <div className="text-xl font-semibold text-blue-600 mb-2">
-             Nomor Antrian
+              Nomor Antrian
             </div>
             <div className="text-6xl font-bold text-orange-500 border-4 border-orange-500 rounded-lg px-8 py-4 mb-6">
               {queue ?? "Loading..."}
             </div>
-
           </div>
         </div>
 
@@ -171,9 +171,10 @@ export default function QueueUI({
           Hadir
         </button>
         <a
-          href="/queue.xlsx"
-          download="queue.xlsx"
-          className="bg-gray-600 text-white px-6 py-3 rounded-lg shadow-lg hover:bg-gray-700"
+          href={`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=xlsx`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="bg-purple-600 text-white px-6 py-3 rounded-lg shadow-lg hover:bg-purple-700"
         >
           Download Excel
         </a>

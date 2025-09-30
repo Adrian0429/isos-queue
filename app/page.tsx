@@ -1,49 +1,63 @@
 // app/page.tsx
-import { promises as fs } from "fs";
-import path from "path";
-import * as XLSX from "xlsx";
-import QueueUI from "./queue-ui"; // client component
+import QueueUI from "./queue-ui";
+import { getSheetsClient } from "./lib/googleSheets";
 
-function isToday(dateString: string) {
-  if (!dateString) return false;
-  const d = new Date(dateString);
-  const now = new Date();
-  return (
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate()
-  );
-}
+const SHEET_ID = "1ok5gX2BNOLbqQrf6YZI1EZmMjlrDq7e33jIvUYbwjw0"; // from Google Sheets URL
 
 export default async function Page() {
-  const filePath = path.join(process.cwd(), "public", "queue.xlsx");
-  const fileBuffer = await fs.readFile(filePath);
-  const workbook = XLSX.read(fileBuffer, { type: "buffer" });
-  const sheetName = workbook.SheetNames[0];
-  const worksheet = workbook.Sheets[sheetName];
+  const sheets = await getSheetsClient();
 
-  const jsonData: string[][] = XLSX.utils.sheet_to_json(worksheet, {
-    header: 1,
-    defval: "",
-  }) as string[][];
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: "Sheet1!A:C", // Nomor Antrian, Timestamp, Mark
+  });
 
-  // remove header row and filter for today's data only
+  const rows = res.data.values || [];
+  const header = rows[0] || [];
+  const jsonData = rows.slice(1).map((r) => ({
+    "Nomor Antrian": r[0] || "",
+    Timestamp: r[1] || "",
+    Mark: r[2] || "",
+  }));
+
+  // today’s date in Asia/Seoul timezone (YYYY-MM-DD)
+  const today = new Date().toLocaleDateString("en-CA", {
+    timeZone: "Asia/Seoul",
+  });
+
+  // filter rows that are from today and not already attended/absent
   const filtered = jsonData
-    .slice(1)
     .filter((row) => {
-      const nomor = row[0];
-      const timestamp = row[1];
-      const mark = row[2];
-
-      return (
-        nomor &&
-        isToday(timestamp) &&
-        (!mark || (mark !== "Attend" && mark !== "Absent"))
-      );
+      if (!row.Timestamp) return false;
+      const rowDate = new Date(row.Timestamp).toLocaleDateString("en-CA", {
+        timeZone: "Asia/Seoul",
+      });
+      return rowDate === today;
     })
-    .map((row) => row[0]);
+    .filter((row) => !["Attend", "Absent"].includes(row.Mark));
 
-  let currentQueue = filtered.length > 0 ? filtered[0] : "No Queue";
+  // convert timestamp into friendly format
+  const friendly = filtered.map((r) => ({
+    ...r,
+    Timestamp: new Date(r.Timestamp).toLocaleString("en-US", {
+      timeZone: "Asia/Seoul",
+      weekday: "short",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }),
+  }));
 
-  return <QueueUI initialQueue={currentQueue} queues={filtered} />;
+  let currentQueue =
+    friendly.length > 0 ? friendly[0]["Nomor Antrian"] : "No Queue";
+
+  return (
+    <QueueUI
+      initialQueue={currentQueue}
+      queues={friendly.map((r) => r["Nomor Antrian"])}
+    />
+  );
 }

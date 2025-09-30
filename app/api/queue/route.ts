@@ -1,7 +1,8 @@
+// app/api/queue/route.ts
 import { NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
-import * as XLSX from "xlsx";
+import { getSheetsClient } from "@/app/lib/googleSheets";
+
+const SHEET_ID = "1ok5gX2BNOLbqQrf6YZI1EZmMjlrDq7e33jIvUYbwjw0";
 
 function formatTimestamp(date: Date) {
   return date.toLocaleString("en-US", {
@@ -12,13 +13,13 @@ function formatTimestamp(date: Date) {
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
-    timeZone: "Asia/Seoul", // adjust to your timezone
+    timeZone: "Asia/Seoul",
   });
 }
 
-function isToday(dateString: string) {
-  if (!dateString) return false;
-  const d = new Date(dateString);
+function isToday(ts: string) {
+  if (!ts) return false;
+  const d = new Date(ts);
   const now = new Date();
   return (
     d.getFullYear() === now.getFullYear() &&
@@ -29,35 +30,39 @@ function isToday(dateString: string) {
 
 export async function POST(req: Request) {
   const { action, currentQueue } = await req.json();
+  const sheets = await getSheetsClient();
 
-  const filePath = path.join(process.cwd(), "public", "queue.xlsx");
-  const fileBuffer = await fs.readFile(filePath);
-  const workbook = XLSX.read(fileBuffer, { type: "buffer" });
-  const sheetName = workbook.SheetNames[0];
-  const worksheet = workbook.Sheets[sheetName];
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: "Sheet1!A:C",
+  });
 
-  // full sheet data (kept for saving)
-  let fullData: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
 
-  // filter today's rows only
-  let todayData = fullData.filter((r) => isToday(r["Timestamp"]));
+
+  const rows = res.data.values || [];
+  const header = rows[0];
+  let data = rows.slice(1).map((r) => ({
+    "Nomor Antrian": r[0] || "",
+    Timestamp: r[1] || "",
+    Mark: r[2] || "",
+  }));
+
+  // filter today's
+  let todayData = data.filter((r) => isToday(r["Timestamp"]));
 
   if (action === "Attend" || action === "Absent") {
-    // ✅ update in fullData, not just todayData
-    fullData = fullData.map((row) => {
-      if (row["Nomor Antrian"] === currentQueue) {
-        return { ...row, Mark: action };
-      }
-      return row;
-    });
-  } else if (action === "New") {
-    // generate next queue number for today only
-    let lastQueue = "A0000";
-    if (todayData.length > 0) {
-      const last = todayData[todayData.length - 1];
-      if (last["Nomor Antrian"]) lastQueue = last["Nomor Antrian"];
+    const idx = data.findIndex((r) => r["Nomor Antrian"] === currentQueue);
+    if (idx >= 0) {
+      data[idx].Mark = action;
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `Sheet1!C${idx + 2}`, // C column (Mark), row+2 (because header)
+        valueInputOption: "RAW",
+        requestBody: { values: [[action]] },
+      });
     }
-
+  } else if (action === "New") {
+    let lastQueue = todayData.length > 0 ? todayData[todayData.length - 1]["Nomor Antrian"] : "A0000";
     const match = lastQueue.match(/^([A-Z]+)(\d+)$/);
     let newQueue = "A0001";
     if (match) {
@@ -68,44 +73,23 @@ export async function POST(req: Request) {
       newQueue = `${prefix}${nextNum}`;
     }
 
-    const now = new Date();
-    const timestamp = formatTimestamp(now); // ✅ friendly format
+    const timestamp = formatTimestamp(new Date());
 
-    const newRow = {
-      "Nomor Antrian": newQueue,
-      Timestamp: timestamp,
-      Mark: "",
-    };
-
-    // push to both todayData and fullData
-    fullData.push(newRow);
-    todayData.push(newRow);
-
-    // save sheet
-    const newSheet = XLSX.utils.json_to_sheet(fullData, {
-      header: ["Nomor Antrian", "Timestamp", "Mark"],
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SHEET_ID,
+      range: "Sheet1!A:C",
+      valueInputOption: "RAW",
+      requestBody: {
+        values: [[newQueue, timestamp, ""]],
+      },
     });
-    workbook.Sheets[sheetName] = newSheet;
-    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
-    await fs.writeFile(filePath, buffer);
 
     return NextResponse.json({ newQueue });
   }
 
-  // ✅ save updated fullData for Attend/Absent
-  const newSheet = XLSX.utils.json_to_sheet(fullData, {
-    header: ["Nomor Antrian", "Timestamp", "Mark"],
-  });
-  workbook.Sheets[sheetName] = newSheet;
-  const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
-  await fs.writeFile(filePath, buffer);
-
-  const remaining = fullData
-    .filter(
-      (r) =>
-        isToday(r["Timestamp"]) &&
-        (!r["Mark"] || (r["Mark"] !== "Attend" && r["Mark"] !== "Absent"))
-    )
+  const remaining = data
+    .filter((r) => isToday(r["Timestamp"]))
+    .filter((r) => !["Attend", "Absent"].includes(r["Mark"]))
     .map((r) => r["Nomor Antrian"]);
 
   return NextResponse.json({
